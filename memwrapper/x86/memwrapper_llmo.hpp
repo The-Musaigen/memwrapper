@@ -309,7 +309,7 @@ namespace memwrapper
 		}
 	}; // !class scoped_fill<bufsize>
 
-#if defined(__cplusplus)
+
 	struct scoped_patch_unit
 	{
 		using byte_vector = std::vector<uint8_t>;
@@ -368,7 +368,7 @@ namespace memwrapper
 		{
 			copy_memory(m_address, m_original.data(), m_original.size());
 		}
-	};
+	}; // !class scoped_patch_unit
 
 	class scoped_patch
 	{
@@ -417,8 +417,8 @@ namespace memwrapper
 		{
 			m_units.push_back(unit);
 		}
-	};
-#endif // defined(__cplusplus)
+	}; // !class scoped_patch
+
 } // !namespace memwrapper
 
 #endif // !MEMWRAPPER_LLMO_HPP_
