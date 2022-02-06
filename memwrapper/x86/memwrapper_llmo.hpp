@@ -145,7 +145,7 @@ namespace memwrapper
 		auto now = reinterpret_cast<uint8_t*>(mbi.AllocationBase);
 		auto end = now + pe->OptionalHeader.SizeOfImage;
 
-		auto i{ 0 };
+		size_t i{ 0 };
 		while (now < end)
 		{
 			for (i = 0; i < mask.size(); i++)
@@ -403,6 +403,14 @@ namespace memwrapper
 
 			for (auto& unit : m_units)
 				unit.restore();
+		}
+
+		void toggle(bool status)
+		{
+			if (status)
+				install();
+			else
+				remove();
 		}
 
 		void add(const scoped_patch_unit& unit)

@@ -22,8 +22,6 @@ namespace memwrapper
 			m_code = reinterpret_cast<uint8_t*>(
 				VirtualAlloc(NULL, m_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
 			);
-
-			std::printf("%X\n", reinterpret_cast<uint32_t>(m_code));
 		}
 
 		// writing manipulations
