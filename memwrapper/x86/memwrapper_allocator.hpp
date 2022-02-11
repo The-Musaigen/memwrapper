@@ -3,6 +3,18 @@
 
 namespace memwrapper
 {
+	enum class Registers
+	{
+		Eax,
+		Ecx,
+		Edx,
+		Ebx,
+		Esp,
+		Ebp,
+		Esi,
+		Edi
+	};
+
 	class basic_allocator
 	{
 	protected:
@@ -96,13 +108,57 @@ namespace memwrapper
 			basic_allocator(size)
 		{}
 
-		// yeah, another class for one function
 		void jmp(const memory_pointer& to)
 		{
 			auto rel32 = detail::get_relative_address(to, now());
 
 			db(0xE9);
 			dbvalue(rel32);
+		}
+
+		void push(Registers reg86)
+		{
+			db(0x50 + static_cast<uint8_t>(reg86));
+		}
+
+		void pop(Registers reg86)
+		{
+			db(0x58 + static_cast<uint8_t>(reg86));
+		}
+
+		void mov(Registers in, Registers out, uint8_t offset)
+		{
+			db(0x8B);
+
+			if (!offset)
+			{
+				db(0x08 * static_cast<uint8_t>(in) + static_cast<uint8_t>(out));
+				
+				if (out == Registers::Esp)
+					db(0x24);
+			}
+			else
+			{
+				db(0x08 * static_cast<uint8_t>(in) + static_cast<uint8_t>(out) + 0x40);
+
+				if (out == Registers::Esp)
+					db(0x24);
+
+				db(offset);
+			}
+		}
+
+		void mov(uint32_t* in, Registers out)
+		{
+			if (out == Registers::Eax)
+				db(0xA3);
+			else
+			{
+				db(0x89);
+				db(0x0D + static_cast<uint8_t>(out) * 0x08 - 0x08);
+			}
+
+			dbvalue(in);
 		}
 	}; // !class asm_allocator : public basic_allocator
 }

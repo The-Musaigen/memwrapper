@@ -3,12 +3,20 @@
 
 namespace memwrapper
 {
+	namespace detail
+	{
+		struct memhook_context
+		{
+			uint32_t return_address;
+		};
+	}
+
 	template<typename Function>
 	class memhook
 	{
 	protected:
-		using memhook_original_code_t	= std::unique_ptr<uint8_t[]>;
-		using memhook_code_gen_t		= std::unique_ptr<asm_allocator>;
+		using memhook_original_code_t = std::unique_ptr<uint8_t[]>;
+		using memhook_code_gen_t = std::unique_ptr<asm_allocator>;
 		
 		using function_info = detail::function_analyzer<Function>;
 		using return_type = typename function_info::return_type;
@@ -19,7 +27,7 @@ namespace memwrapper
 		size_t m_size;
 
 		memhook_original_code_t m_original_code;
-		memhook_code_gen_t		m_code;
+		memhook_code_gen_t m_code;
 
 		bool m_installed;
 		bool m_listing_broken;
@@ -30,9 +38,13 @@ namespace memwrapper
 		memhook(const memory_pointer& address, const memory_pointer& callback) :
 			m_address(address),
 			m_callback(callback),
+			m_call_abs_address(0),
 			m_size(0),
+			m_original_code(nullptr),
+			m_code(nullptr),
 			m_installed(false),
-			m_listing_broken(false)
+			m_listing_broken(false),
+			m_is_call_instruction(false)
 		{
 			auto cursor = m_address.get<uint8_t*>();
 
@@ -69,7 +81,7 @@ namespace memwrapper
 			if (m_code)
 			{
 				// installing jmp to callback again
-				m_code->set_offset(0);
+				m_code->set_offset(11);
 				m_code->jmp(m_callback);
 				
 				// marking as installed
@@ -90,15 +102,23 @@ namespace memwrapper
 
 			// creating original code and trampoline code instances
 			m_original_code = std::make_unique<uint8_t[]>(m_size);
-			m_code			= std::make_unique<asm_allocator>();
+			m_code = std::make_unique<asm_allocator>();
 
 			// copying original instructions from the target address
 			copy_memory(m_original_code.get(), m_address, m_size);
 
 			// generating trampoline
-			auto address = m_address.get_int();
-			auto detour = address + m_size;
-
+			
+			// storing eax, cuz he doesn't have to be always zero
+			m_code->push(Registers::Eax);
+			// mov eax, dword ptr[esp + 4]; + 4 because we pushed eax into the stack
+			m_code->mov(Registers::Eax, Registers::Esp, sizeof(uint32_t));
+			// mov dword ptr[m_context.return_address], eax; moving return address into our context
+			m_code->mov(&m_context.return_address, Registers::Eax);
+			// restoring eax from the stack
+			m_code->pop(Registers::Eax);
+	
+			// jumping to 'hook-function'
 			m_code->jmp(m_callback);
 
 			if(!m_is_call_instruction)
@@ -107,8 +127,8 @@ namespace memwrapper
 			m_code->ready();
 
 			// installing patch
+			auto address = m_address.get_int();
 			auto rel32 = detail::get_relative_address(m_code->begin(), address);
-
 			if(!m_is_call_instruction)
 				write_memory<uint8_t>(address, 0xE9);
 
@@ -169,13 +189,13 @@ namespace memwrapper
 				if (m_is_call_instruction)
 				{
 					// Redirecting jmp to hooked function
-					m_code->set_offset(0);
+					m_code->set_offset(11);
 					m_code->jmp(m_call_abs_address);
 				}
 				else
 				{
 					// Removing jmp to avoid crash/calling detour
-					fill_memory(code_ptr, 0x90, 0x5);
+					fill_memory(code_ptr + 0xB, 0x90, 0x5);
 				}
 			}
 
@@ -191,7 +211,7 @@ namespace memwrapper
 
 		uintptr_t get_trampoline()
 		{
-			auto code = reinterpret_cast<uint32_t>(m_code->get(5));
+			auto code = reinterpret_cast<uint32_t>(m_code->get(16));
 			return (m_is_call_instruction) ? (m_call_abs_address) : (code);
 		}
 	private:
@@ -212,9 +232,8 @@ namespace memwrapper
 			} jcc;
 #pragma pack(pop)
 
-			uint8_t* now	= m_address;
-
-			uint32_t step	= 0;
+			uint8_t* now = m_address;
+			uint32_t step = 0;
 
 			bool finished = false;
 			while (!finished)
@@ -294,6 +313,8 @@ namespace memwrapper
 				now += len;
 			}
 		}
+	public:
+		detail::memhook_context m_context;
 	}; // !class memhook<Function>
 
 } // !namespace memwrapper
