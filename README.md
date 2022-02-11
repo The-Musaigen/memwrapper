@@ -66,6 +66,7 @@ int main()
 ```
 ## Examples: Hooking
 ```cpp
+
 // Arguments is optional in current implementation.
 using sum_t = int(__cdecl*)(int, int);
 
@@ -79,6 +80,17 @@ int _declspec(noinline) sum(int a, int b)
 
 int _declspec(noinline) sum_hooked(int a, int b)
 {
+    // output: 0x173469 for example
+    // if you look 0x173469 into disassembler you will see something like that
+    /*
+        00174360  push        2
+        00174362  push        1
+        00174364  call        sum (01741FEh)
+        00174369  pop         ecx // return_address
+    */
+    // you can change this value, but nothing happens...
+    // TODO: implement return address change
+    std::cout << std::hex << std::uppercase << hook_sum->m_context.return_address << std::endl; 
     std::cout << a << " " << b << std::endl; // output: 1, 2
     return hook_sum->call(a + 4, b);
 }
