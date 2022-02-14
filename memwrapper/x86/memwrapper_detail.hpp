@@ -48,7 +48,7 @@ namespace memwrapper
 		{
 			using return_type = Ret;
 
-			static constexpr auto args_count = sizeof...(Args) - 1;
+			static constexpr auto args_count = sizeof...(Args) - 1; // ecx/rcx
 			static constexpr auto call_convention = CallingConvention::Thiscall;
 		}; // !struct function_analyzer<Ret(__thiscall*)(Args...)>
 
@@ -57,7 +57,7 @@ namespace memwrapper
 		{
 			using return_type = Ret;
 
-			static constexpr auto args_count = sizeof...(Args) - 2;
+			static constexpr auto args_count = sizeof...(Args) - 2; // ecx/rcx, edx/rdx
 			static constexpr auto call_convention = CallingConvention::Fastcall;
 		}; // !struct function_analyzer<Ret(__fastcall*)(Args...)>
 
@@ -79,7 +79,7 @@ namespace memwrapper
 			template<typename Ret, typename... Args>
 			static inline Ret call(const memory_pointer& fn, Args... args)
 			{
-				return reinterpret_cast<Ret(__cdecl*)(Args...)>(fn.get())(args...);
+				return fn.get<Ret(__cdecl*)(Args...)>()(args...);
 			}
 		}; // !struct function_caller<CallingConvention::Cdecl>
 
@@ -89,7 +89,7 @@ namespace memwrapper
 			template<typename Ret, typename... Args>
 			static inline Ret call(const memory_pointer& fn, Args... args)
 			{
-				return reinterpret_cast<Ret(__stdcall*)(Args...)>(fn.get())(args...);
+				return fn.get<Ret(__stdcall*)(Args...)>()(args...);
 			}
 		}; // !struct function_caller<CallingConvention::Stdcall>
 
@@ -99,7 +99,7 @@ namespace memwrapper
 			template<typename Ret, typename... Args>
 			static inline Ret call(const memory_pointer& fn, Args... args)
 			{
-				return reinterpret_cast<Ret(__thiscall*)(Args...)>(fn.get())(args...);
+				return fn.get<Ret(__thiscall*)(Args...)>()(args...);
 			}
 		}; // !struct function_caller<CallingConvention::Thiscall>
 
@@ -109,7 +109,7 @@ namespace memwrapper
 			template<typename Ret, typename... Args>
 			static inline Ret call(const memory_pointer& fn, Args... args)
 			{
-				return reinterpret_cast<Ret(__fastcall*)(Args...)>(fn.get())(args...);
+				return fn.get<Ret(__fastcall*)(Args...)>()(args...);
 			}
 		}; // !struct function_caller<CallingConvention::Fastcall>
 

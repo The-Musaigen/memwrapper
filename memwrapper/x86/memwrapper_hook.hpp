@@ -7,7 +7,7 @@ namespace memwrapper
 	{
 		struct memhook_context
 		{
-			uint32_t return_address;
+			uintptr_t return_address;
 		};
 	}
 
@@ -81,9 +81,12 @@ namespace memwrapper
 			if (m_code)
 			{
 				// installing jmp to callback again
-				m_code->set_offset(11);
+				m_code->set_offset(0xB);
 				m_code->jmp(m_callback);
 				
+				// flushing memory
+				m_code->ready();
+
 				// marking as installed
 				m_installed = true;
 				return;
@@ -146,61 +149,61 @@ namespace memwrapper
 			if (!m_installed)
 				return;
 
-			hde32s hs;
-			hde32_disasm(m_address, &hs);
-			if ((hs.flags & F_ERROR) ||
-				!(hs.flags & F_RELATIVE) || 
-				!(hs.flags & F_IMM32))
+			auto unload = [this]() 
 			{
 				// trying to restore listing/original code
 				copy_memory(m_address, m_original_code.get(), m_size);
 
-				// unloading pointers
+				// unloading memory block
 				m_code->free();
 
+				// reseting smart pointers
 				m_original_code.reset();
 				m_code.reset();
 
 				// marking as uninstalled
 				m_installed = false;
 				m_is_call_instruction = false;
-				return;
-			}
+			};
 
-			auto destination = detail::restore_absolute_address(hs.imm.imm32, m_address, hs.len);
-			auto code_ptr = reinterpret_cast<uint32_t>(m_code->begin());
-
-			if (destination == code_ptr)
-			{
-				// trying to restore listing
-				copy_memory(m_address, m_original_code.get(), m_size);
-
-				// unloading pointers
-				m_code->free();
-
-				m_original_code.reset();
-				m_code.reset();
-
-				// updating states
-				m_is_call_instruction = false;
-			}
-			else
+			auto patch_trampoline = [this]()
 			{
 				if (m_is_call_instruction)
 				{
 					// Redirecting jmp to hooked function
-					m_code->set_offset(11);
+					m_code->set_offset(0xB);
 					m_code->jmp(m_call_abs_address);
 				}
 				else
 				{
 					// Removing jmp to avoid crash/calling detour
-					fill_memory(code_ptr + 0xB, 0x90, 0x5);
+					fill_memory(m_code->get(0xB), 0x90, 0x5);
 				}
-			}
 
-			// marking as uninstalled
-			m_installed = false;
+				// flushing memory
+				m_code->ready();
+
+				// marking as uninstalled
+				m_installed = false;
+			};
+
+			hde32s hs;
+			hde32_disasm(m_address, &hs);
+		
+			// listing broken, or not a rel32 (jmp, call, etc...) instruction
+			if ((hs.flags & F_ERROR) ||
+				!(hs.flags & F_RELATIVE) || 
+				!(hs.flags & F_IMM32))
+				return unload();
+
+			uintptr_t destination = detail::restore_absolute_address(hs.imm.imm32, m_address, hs.len);
+			uintptr_t code = m_code->get<uintptr_t>();
+
+			// if operand is our trampoline code or original absolute call address
+			if ((destination == code) || (destination == m_call_abs_address))
+				unload();
+			else
+				patch_trampoline();
 		}
 
 		template<typename... Args>
@@ -211,7 +214,7 @@ namespace memwrapper
 
 		uintptr_t get_trampoline()
 		{
-			auto code = reinterpret_cast<uint32_t>(m_code->get(16));
+			uintptr_t code = m_code->get<uintptr_t>(0x10);
 			return (m_is_call_instruction) ? (m_call_abs_address) : (code);
 		}
 	private:

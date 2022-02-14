@@ -15,6 +15,7 @@ namespace memwrapper
 		Edi
 	};
 
+	inline constexpr auto kPageSize4Kb = 4096;
 	class basic_allocator
 	{
 	protected:
@@ -22,7 +23,7 @@ namespace memwrapper
 		uint32_t m_size;
 		uint32_t m_offset;
 	public:
-		basic_allocator(uint32_t size = 4096) :
+		basic_allocator(uint32_t size = kPageSize4Kb) :
 			m_code(nullptr),
 			m_size(0),
 			m_offset(0)
@@ -80,17 +81,19 @@ namespace memwrapper
 		}
 
 		// code pointer manipulations
-		uint8_t* begin()				{ return m_code; }
-		uint8_t* now()					{ return &m_code[m_offset]; }
-		uint8_t* end()					{ return &m_code[m_size]; }
-		uint8_t* get(uint32_t offset)	{ return &m_code[offset]; }
+		uint8_t* begin()				 	{ return m_code; }
+		uint8_t* now()					 	{ return &m_code[m_offset]; }
+		uint8_t* end()					 	{ return &m_code[m_size]; }
+		uint8_t* get(uint32_t offset = 0)	{ return &m_code[offset]; }
+
+		template<typename T>
+		T get(uint32_t offset = 0) { return reinterpret_cast<T>(&m_code[offset]); }
 
 		void free() { VirtualFree(m_code, NULL, MEM_RELEASE); }
 		void ready() { flush_memory(m_code, m_size); }
 
 		// offset manipulations
-		uint32_t get_offset()
-		{ return m_offset; }
+		uint32_t get_offset() { return m_offset; }
 
 		void set_offset(uint32_t offset)
 		{
@@ -104,7 +107,7 @@ namespace memwrapper
 	class asm_allocator : public basic_allocator
 	{
 	public:
-		asm_allocator(uint32_t size = 4096) :
+		asm_allocator(uint32_t size = kPageSize4Kb) :
 			basic_allocator(size)
 		{}
 
@@ -131,21 +134,15 @@ namespace memwrapper
 			db(0x8B);
 
 			if (!offset)
-			{
 				db(0x08 * static_cast<uint8_t>(in) + static_cast<uint8_t>(out));
-				
-				if (out == Registers::Esp)
-					db(0x24);
-			}
 			else
-			{
 				db(0x08 * static_cast<uint8_t>(in) + static_cast<uint8_t>(out) + 0x40);
 
-				if (out == Registers::Esp)
-					db(0x24);
+			if (out == Registers::Esp)
+				db(0x24);
 
+			if (offset)
 				db(offset);
-			}
 		}
 
 		void mov(uint32_t* in, Registers out)
