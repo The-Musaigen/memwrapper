@@ -25,11 +25,11 @@
 #if defined(MEMWRAPPER_WIN_X86)
 #    include "hde/hde32.h"
 
-#    include "x86/memwrapper_allocator.hpp"
 #    include "x86/memwrapper_basic.hpp"
-#    include "x86/memwrapper_detail.hpp"
-#    include "x86/memwrapper_hook.hpp"
 #    include "x86/memwrapper_llmo.hpp"
+#    include "x86/memwrapper_detail.hpp"
+#    include "x86/memwrapper_allocator.hpp"
+#    include "x86/memwrapper_hook.hpp"
 #endif   // defined(MEMWRAPPER_WIN_X86)
 
 #endif   // !MEMWRAPPER_H_

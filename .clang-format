@@ -32,9 +32,9 @@ BraceWrapping:
   BeforeCatch: false
   BeforeElse: false
   IndentBraces: false
-  SplitEmptyFunction: true
-  SplitEmptyRecord: true
-  SplitEmptyNamespace: true
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
 
 BreakBeforeBinaryOperators: None
 BreakBeforeTernaryOperators: true
@@ -48,7 +48,7 @@ MaxEmptyLinesToKeep: 1
 NamespaceIndentation: None
 PointerAlignment: Left
 # Sorting rules
-SortIncludes: true
+SortIncludes: false
 SortUsingDeclarations: true
 # Spacing ruels
 SpaceAfterCStyleCast: true
