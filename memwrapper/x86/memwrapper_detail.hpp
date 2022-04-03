@@ -109,6 +109,19 @@ inline uint32_t align_value(uint32_t value, uint32_t alignment) {
     const uint32_t remainder = (value % alignment);
     return (remainder == 0) ? (value) : (value - remainder + alignment);
 }
+
+#pragma pack(push, 1)
+struct jmp_relative {
+    uint8_t  opcode;
+    uint32_t operand;
+};
+struct call_relative : public jmp_relative {};
+struct jcc_relative {
+    uint8_t opcode;
+    uint8_t opcode2;
+    uint32_t operand;
+};
+#pragma pack(pop)
 }   // namespace detail
 
 template<typename Ret, detail::CallingConvention Convention, typename... Args>

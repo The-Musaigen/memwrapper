@@ -5,7 +5,7 @@ namespace memwrapper {
 namespace detail {
 struct memhook_context {
     uintptr_t return_address;
-};
+};   // struct memhook_context;
 }   // namespace detail
 
 template<typename Function>
@@ -104,9 +104,9 @@ class memhook {
         m_code->push(Registers::Eax);
         // mov eax, dword ptr[esp + 4]; + 4 because we pushed eax into the stack
         m_code->mov(Registers::Eax, Registers::Esp, sizeof(uint32_t));
-        // mov dword ptr[m_context.return_address], eax; moving return address
+        // mov dword ptr[ctx.return_address], eax; moving return address
         // into our context
-        m_code->mov(&m_context.return_address, Registers::Eax);
+        m_code->mov(&ctx.return_address, Registers::Eax);
         // restoring eax from the stack
         m_code->pop(Registers::Eax);
 
@@ -202,18 +202,9 @@ class memhook {
 
   private:
     void generate_trampoline() {
-#pragma pack(push, 1)
-        struct {
-            uint8_t  opcode;
-            uint32_t operand;
-        } jmp, call;
-
-        struct {
-            uint8_t  opcode;
-            uint8_t  opcode2;
-            uint32_t operand;
-        } jcc;
-#pragma pack(pop)
+        detail::call_relative call = { 0xE8, 0x00000000 };
+        detail::jmp_relative  jmp  = { 0xE9, 0x00000000 };
+        detail::jcc_relative  jcc  = { 0x0F, 0x80, 0x00000000 };
 
         uint8_t* now  = m_address;
         uint32_t step = 0;
@@ -235,47 +226,42 @@ class memhook {
                 break;
 
             if (hs.opcode == 0xE8) {
-                auto destination =
+                uintptr_t destination =
                     detail::restore_absolute_address(hs.imm.imm32, now);
-                auto rel32 =
-                    detail::get_relative_address(destination, m_code->now());
 
-                call.opcode  = 0xE8;
-                call.operand = rel32;
+                call.operand =
+                    detail::get_relative_address(destination, m_code->now());
 
                 opcode = &call;
                 oplen  = sizeof(call);
             } else if ((hs.opcode & 0xFD) == 0xE9) {
-                auto destination = reinterpret_cast<uint32_t>(now + hs.len);
+                uintptr_t destination =
+                    reinterpret_cast<uintptr_t>(now + hs.len);
                 if (hs.opcode == 0xEB)
                     destination += hs.imm.imm8;
                 else
                     destination += hs.imm.imm32;
 
-                auto rel32 =
+                jmp.operand =
                     detail::get_relative_address(destination, m_code->now());
-
-                jmp.opcode  = 0xE9;
-                jmp.operand = rel32;
 
                 opcode = &jmp;
                 oplen  = sizeof(jmp);
             } else if ((hs.opcode & 0xF0) == 0x70 ||
                        (hs.opcode2 & 0xF0) == 0x80) {
-                auto destination = reinterpret_cast<uint32_t>(now + hs.len);
+                uintptr_t destination =
+                    reinterpret_cast<uint32_t>(now + hs.len);
                 if ((hs.opcode & 0xF0) == 0x70)
                     destination += hs.imm.imm8;
                 else
                     destination += hs.imm.imm32;
 
-                auto cond =
+                uint8_t cond =
                     ((hs.opcode != 0x0F ? hs.opcode : hs.opcode2) & 0x0F);
-                auto rel32 = detail::get_relative_address(
-                    destination, m_code->now(), sizeof(jcc));
 
-                jcc.opcode  = 0x0F;
                 jcc.opcode2 = (0x80 | cond);
-                jcc.operand = rel32;
+                jcc.operand = detail::get_relative_address(
+                    destination, m_code->now(), sizeof(jcc));
 
                 opcode = &jcc;
                 oplen  = sizeof(jcc);
@@ -294,7 +280,7 @@ class memhook {
     }
 
   public:
-    detail::memhook_context m_context;
+    detail::memhook_context ctx;
 };   // !class memhook<Function>
 
 }   // namespace memwrapper

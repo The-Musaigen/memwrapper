@@ -64,12 +64,18 @@ class basic_allocator {
     // code pointer manipulations
     uint8_t* begin() { return m_code; }
     uint8_t* now() { return &m_code[m_offset]; }
-    uint8_t* end() { return &m_code[m_size]; }
-    uint8_t* get(uint32_t offset = 0) { return &m_code[offset]; }
+    uint8_t* end() { return &m_code[m_size - 1u]; }
+
+    uint8_t* get(uint32_t offset = 0) { 
+        if (offset < m_size)
+            return &m_code[offset];
+        else
+            return end();
+    }
 
     template<typename T>
     T get(uint32_t offset = 0) {
-        return reinterpret_cast<T>(&m_code[offset]);
+        return reinterpret_cast<T>(get(offset));
     }
 
     void free() { VirtualFree(m_code, NULL, MEM_RELEASE); }
