@@ -90,7 +90,7 @@ int _declspec(noinline) sum_hooked(int a, int b)
     */
     // you can change this value, but nothing happens...
     // TODO: implement return address change
-    std::cout << std::hex << std::uppercase << hook_sum->m_context.return_address << std::endl; 
+    std::cout << std::hex << std::uppercase << hook_sum->ctx.return_address << std::endl; 
     std::cout << a << " " << b << std::endl; // output: 1, 2
     return hook_sum->call(a + 4, b);
 }
