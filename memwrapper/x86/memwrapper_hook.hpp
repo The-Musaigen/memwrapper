@@ -71,7 +71,7 @@ class memhook {
 
   public:
     /**
-     * We forbid constructing from other hooks..
+     * We forbid constructing from other hooks.
      */
     memhook(const memhook&) = delete;
     memhook(memhook&&)   = delete;
