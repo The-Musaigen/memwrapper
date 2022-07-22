@@ -65,5 +65,5 @@ SpacesInSquareBrackets: false
 UseTab: Never # GitHub doesn't loves tabs
 # Indenting rules
 IndentCaseLabels: false
-IndentPPDirectives: AfterHash
+IndentPPDirectives: None
 IndentWrappedFunctionNames: true

@@ -3,216 +3,285 @@
 
 namespace memwrapper {
 namespace detail {
+
+enum MemhookFlags : uint32_t {
+    kNone            = (0),
+    kInstalled       = (1 << 0),
+    kListingBroken   = (1 << 1),
+    kExecutable      = (1 << 2),
+    kCallInstruction = (1 << 3)
+};
+
 struct memhook_context {
     uintptr_t return_address;
 };   // struct memhook_context;
 }   // namespace detail
 
+/**
+ * Constants.
+ */
+constexpr uint8_t  kCallOpcode = 0xE8;
+constexpr uint8_t  kJumpOpcode = 0xE9;
+constexpr uint8_t  kNopOpcode  = 0x90;
+constexpr uint32_t kJumpSize   = 0x05u;
+
 template<typename Function>
 class memhook {
   protected:
     using memhook_original_code_t = std::unique_ptr<uint8_t[]>;
-    using memhook_code_gen_t      = std::unique_ptr<asm_allocator>;
+    using memhook_trampoline_t    = std::unique_ptr<asm_allocator>;
 
-    using function_info = detail::function_analyzer<Function>;
-    using return_type   = typename function_info::return_type;
+    using memhook_flags_t    = detail::MemhookFlags;
+    using memhook_call_abs_t = uintptr_t;
 
-    memory_pointer m_address;
-    memory_pointer m_callback;
+    using Ret = detail::return_type_t<Function>;
 
+    /**
+     * The function in memory where the hook will be installed.
+     */
+    memory_pointer m_hookee;
+    /**
+     * The function in memory that will be the hook.
+     */
+    memory_pointer m_hooker;
+    /**
+     * Hook size.
+     */
     size_t m_size;
-
+    /**
+     * Original instructions for recovery..
+     */
     memhook_original_code_t m_original_code;
-    memhook_code_gen_t      m_code;
-
-    bool m_installed;
-    bool m_listing_broken;
-    bool m_is_call_instruction;
-
-    uint32_t m_call_abs_address;
+    /**
+     * ASM code for the trampoline.
+     */
+    memhook_trampoline_t m_trampoline_code;
+    /**
+     * Hook flags.
+     */
+    uint32_t m_flags;
+    /**
+     * Stores the absolute address of a function for a call instruction.
+     */
+    memhook_call_abs_t m_call_abs;
+    /**
+     * Hook runtime context.
+     */
+    detail::memhook_context m_context;
 
   public:
-    memhook(const memory_pointer& address, const memory_pointer& callback)
-        : m_address(address)
-        , m_callback(callback)
-        , m_call_abs_address(0)
-        , m_size(0)
-        , m_original_code(nullptr)
-        , m_code(nullptr)
-        , m_installed(false)
-        , m_listing_broken(false)
-        , m_is_call_instruction(false) {
-        auto cursor = m_address.get<uint8_t*>();
+    /**
+     * We forbid constructing from other hooks..
+     */
+    memhook(const memhook&) = delete;
+    memhook(memhook&&)   = delete;
+    memhook& operator=(const memhook&) = delete;
+    memhook& operator=(memhook&&) = delete;
 
-        while (m_size < 5) {
+    /**
+     * Constructor.
+     * 
+     * \param hookee The function in memory where the hook will be installed.
+     * \param hooker The function in memory that will be the hook.
+     */
+    memhook(const memory_pointer& hookee, const memory_pointer& hooker)
+        : m_hookee(hookee)
+        , m_hooker(hooker)
+        , m_size(0u)
+        , m_call_abs(0u)
+        , m_flags(memhook_flags_t::kNone) {
+        uint8_t* cursor = m_hookee;
+
+        while (m_size < kJumpSize) {
             hde32s hs;
             hde32_disasm(cursor, &hs);
 
-            m_listing_broken = (hs.flags & F_ERROR);
-            if (m_listing_broken)
+            if (hs.flags & F_ERROR) {
+                m_flags |= memhook_flags_t::kListingBroken;
                 break;
+            }
 
-            cursor += hs.len;
             m_size += hs.len;
+            cursor += hs.len;
         }
+
+        if (is_executable(m_hookee))
+            m_flags |= memhook_flags_t::kExecutable;
     }
 
+    /**
+     * Destructor.
+     */
     ~memhook() { remove(); }
 
+    /**
+     * Installs the hook.
+     */
     void install() {
-        if (m_listing_broken)
+        using std::make_unique, detail::get_relative_address;
+
+        // Checking is we available to place hook.
+        if ((m_flags & memhook_flags_t::kInstalled) ||
+            (m_flags & memhook_flags_t::kListingBroken) ||
+            !(m_flags & memhook_flags_t::kExecutable))
             return;
 
-        if (m_installed)
-            return;
+        if (m_original_code) {
+            // Installing jump to our hooker-function again.
+            m_trampoline_code->set_offset(0xBu);
+            m_trampoline_code->jmp(m_hooker).ready();
 
-        if (!is_executable(m_address))
-            return;
-
-        if (m_code) {
-            // installing jmp to callback again
-            m_code->set_offset(0xB);
-            m_code->jmp(m_callback);
-
-            // flushing memory
-            m_code->ready();
-
-            // marking as installed
-            m_installed = true;
+            // Marking as installed.
+            m_flags |= memhook_flags_t::kInstalled;
             return;
         } else {
             hde32s hs;
-            hde32_disasm(m_address, &hs);
+            hde32_disasm(m_hookee, &hs);
 
-            if (hs.opcode == 0xE8) {
-                m_is_call_instruction = true;
-                m_call_abs_address =
-                    detail::restore_absolute_address(hs.imm.imm32, m_address);
+            // If call instruction.
+            if (hs.opcode == kCallOpcode) {
+                m_call_abs =
+                    detail::restore_absolute_address(hs.imm.imm32, m_hookee);
+                m_flags |= memhook_flags_t::kCallInstruction;
             }
         }
 
-        // creating original code and trampoline code instances
-        m_original_code = std::make_unique<uint8_t[]>(m_size);
-        m_code          = std::make_unique<asm_allocator>();
+        // Creating trampoline and original code instances.
+        m_original_code   = make_unique<uint8_t[]>(m_size);
+        m_trampoline_code = make_unique<asm_allocator>();
 
-        // copying original instructions from the target address
-        copy_memory(m_original_code.get(), m_address, m_size);
+        // Copying original code.
+        copy_memory(m_original_code.get(), m_hookee, m_size);
 
-        // generating trampoline
+        // Copying return address into `m_context` structure.
+        m_trampoline_code->push(Registers::Eax)
+            .mov(Registers::Eax, Registers::Esp, sizeof(uint32_t))
+            .mov(&m_context.return_address, Registers::Eax)
+            .pop(Registers::Eax)
+            // Jumping to our hooker-function.
+            .jmp(m_hooker);
 
-        // storing eax, cuz he doesn't have to be always zero
-        m_code->push(Registers::Eax);
-        // mov eax, dword ptr[esp + 4]; + 4 because we pushed eax into the stack
-        m_code->mov(Registers::Eax, Registers::Esp, sizeof(uint32_t));
-        // mov dword ptr[ctx.return_address], eax; moving return address
-        // into our context
-        m_code->mov(&ctx.return_address, Registers::Eax);
-        // restoring eax from the stack
-        m_code->pop(Registers::Eax);
+        // Rewriting original instructions.
+        if ((m_flags & memhook_flags_t::kCallInstruction) == 0)
+            generate_trampoline_instructions();
 
-        // jumping to 'hook-function'
-        m_code->jmp(m_callback);
+        // Marking as ready to execute.
+        m_trampoline_code->ready();
 
-        if (!m_is_call_instruction)
-            generate_trampoline();
+        // Patching `hookee`.
+        if ((m_flags & memhook_flags_t::kCallInstruction) == 0)
+            write_memory(m_hookee, kJumpOpcode);
 
-        m_code->ready();
+        write_memory(
+            m_hookee.front(1u),
+            get_relative_address(m_trampoline_code->begin(), m_hookee));
 
-        // installing patch
-        auto address = m_address.get_int();
-        auto rel32   = detail::get_relative_address(m_code->begin(), address);
-        if (!m_is_call_instruction)
-            write_memory<uint8_t>(address, 0xE9);
+        if (m_size > kJumpSize)
+            fill_memory(m_hookee.front(kJumpSize), kNopOpcode,
+                        m_size - kJumpSize);
 
-        write_memory<uint32_t>(address + 1, rel32);
-
-        if (m_size > 5)
-            fill_memory(address + 5, 0x90, m_size - 5);
-
-        // mark as installed
-        m_installed = true;
+        // Marking as installed.
+        m_flags |= memhook_flags_t::kInstalled;
     }
 
+    /**
+     * Removes the hook.
+     */
     void remove() {
-        if (!m_installed)
+        // Checking is we can remove hook.
+        if ((m_flags & memhook_flags_t::kInstalled) == 0)
             return;
 
-        auto unload = [this]() {
-            // trying to restore listing/original code
-            copy_memory(m_address, m_original_code.get(), m_size);
+        // Creating lambda-functions.
+        auto unload_hook = [this]() {
+            // Copying original instructions back.
+            copy_memory(m_hookee, m_original_code.get(), m_size);
 
-            // unloading memory block
-            m_code->free();
+            // Releasing the trampoline.
+            m_trampoline_code->free();
 
-            // reseting smart pointers
+            // Resetting the smart pointers.
+            m_trampoline_code.reset();
             m_original_code.reset();
-            m_code.reset();
 
-            // marking as uninstalled
-            m_installed           = false;
-            m_is_call_instruction = false;
+            // Removing flags.
+            m_flags = memhook_flags_t::kNone;
         };
 
-        auto patch_trampoline = [this]() {
-            if (m_is_call_instruction) {
-                // Redirecting jmp to hooked function
-                m_code->set_offset(0xB);
-                m_code->jmp(m_call_abs_address);
+        auto patch_hook = [this]() {
+            if (m_flags & memhook_flags_t::CallInstruction) {
+                // Redirecting jump to stored function absolute address;
+                m_trampoline_code->set_offset(0xBu);
+                m_trampoline_code->jmp(m_call_abs);
             } else {
-                // Removing jmp to avoid crash/calling detour
-                fill_memory(m_code->get(0xB), 0x90, 0x5);
+                // Nop jump to avoid crash or calling hooker-function.
+                fill_memory(m_trampoline_code->get(0xBu), kNopOpcode,
+                            kJumpSize);
             }
 
-            // flushing memory
-            m_code->ready();
+            // Flushing trampoline.
+            m_trampoline_code->ready();
 
-            // marking as uninstalled
-            m_installed = false;
+            // Marking as uninstalled.
+            m_flags &= ~memhook_flags_t::kInstalled;
         };
 
+        //  Implementing hook remove.
         hde32s hs;
-        hde32_disasm(m_address, &hs);
+        hde32_disasm(m_hookee, &hs);
 
-        // listing broken, or not a rel32 (jmp, call, etc...) instruction
+        // Listing is broken, not a call/jmp instruction (relative + imm32).
         if ((hs.flags & F_ERROR) || !(hs.flags & F_RELATIVE) ||
             !(hs.flags & F_IMM32))
-            return unload();
+            return unload_hook();
 
         uintptr_t destination =
-            detail::restore_absolute_address(hs.imm.imm32, m_address, hs.len);
-        uintptr_t code = m_code->get<uintptr_t>();
+            detail::restore_absolute_address(hs.imm.imm32, m_hookee, hs.len);
+        uintptr_t trampoline = m_trampoline_code->get<uintptr_t>();
 
-        // if operand is our trampoline code or original absolute call address
-        if ((destination == code) || (destination == m_call_abs_address))
-            unload();
+        if ((destination == trampoline) || (destination == m_call_abs))
+            unload_hook();
         else
-            patch_trampoline();
+            patch_hook();
     }
 
+    /**
+     * Calls the original function we hooked.
+     */
     template<typename... Args>
-    return_type call(Args... args) {
-        return call_function<return_type, function_info::call_convention,
-                             Args...>(get_trampoline(), args...);
+    Ret call(Args... args) const {
+        // Shortcut.
+        using std::forward, detail::call_convention_v;
+
+        uintptr_t call_address;
+        if ((m_flags & memhook_flags_t::kCallInstruction))
+            call_address = m_call_abs;
+        else
+            call_address = m_trampoline_code->get(0x10u);
+
+        // Calling our function.
+        return call_function<Ret, call_convention_v<Function>>(
+            call_address, forward<Args>(args)...);
     }
 
-    uintptr_t get_trampoline() {
-        uintptr_t code = m_code->get<uintptr_t>(0x10);
-        return (m_is_call_instruction) ? (m_call_abs_address) : (code);
-    }
+    detail::memhook_context get_context() const { return m_context; }
 
   private:
-    void generate_trampoline() {
-        detail::call_relative call = { 0xE8, 0x00000000 };
-        detail::jmp_relative  jmp  = { 0xE9, 0x00000000 };
-        detail::jcc_relative  jcc  = { 0x0F, 0x80, 0x00000000 };
+    void generate_trampoline_instructions() {
+        using detail::get_relative_address, detail::restore_absolute_address;
 
-        uint8_t* now  = m_address;
-        uint32_t step = 0;
+        // Creating structures of instructions with rel32.
+        detail::call_relative call = { 0xE8, 0x00000000u };
+        detail::jmp_relative  jmp  = { 0xE9, 0x00000000u };
+        detail::jcc_relative  jcc  = { 0x0F, 0x80, 0x00000000u };
+
+        uint8_t* now  = m_hookee;
+        uint32_t step = 0u;
 
         bool finished = false;
         while (!finished) {
             if (step >= m_size) {
-                m_code->jmp(now);
+                m_trampoline_code->jmp(now);
                 break;
             }
 
@@ -227,10 +296,10 @@ class memhook {
 
             if (hs.opcode == 0xE8) {
                 uintptr_t destination =
-                    detail::restore_absolute_address(hs.imm.imm32, now);
+                    restore_absolute_address(hs.imm.imm32, now);
 
                 call.operand =
-                    detail::get_relative_address(destination, m_code->now());
+                    get_relative_address(destination, m_trampoline_code->now());
 
                 opcode = &call;
                 oplen  = sizeof(call);
@@ -243,7 +312,7 @@ class memhook {
                     destination += hs.imm.imm32;
 
                 jmp.operand =
-                    detail::get_relative_address(destination, m_code->now());
+                    get_relative_address(destination, m_trampoline_code->now());
 
                 opcode = &jmp;
                 oplen  = sizeof(jmp);
@@ -260,8 +329,8 @@ class memhook {
                     ((hs.opcode != 0x0F ? hs.opcode : hs.opcode2) & 0x0F);
 
                 jcc.opcode2 = (0x80 | cond);
-                jcc.operand = detail::get_relative_address(
-                    destination, m_code->now(), sizeof(jcc));
+                jcc.operand = get_relative_address(
+                    destination, m_trampoline_code->now(), sizeof(jcc));
 
                 opcode = &jcc;
                 oplen  = sizeof(jcc);
@@ -270,19 +339,15 @@ class memhook {
                 oplen  = len;
             }
 
-            // adding instruction to list
-            m_code->db(opcode, oplen);
+            // Adding instruction to code.
+            m_trampoline_code->db(opcode, oplen);
 
-            // shifting cursor
+            // Shifting cursor.
             step += oplen;
             now += len;
         }
     }
-
-  public:
-    detail::memhook_context ctx;
-};   // !class memhook<Function>
-
+};
 }   // namespace memwrapper
 
 #endif   // !MEMWRAPPER_HOOK_HPP_

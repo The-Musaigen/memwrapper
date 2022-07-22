@@ -4,15 +4,31 @@
 namespace memwrapper {
 enum class Registers { Eax, Ecx, Edx, Ebx, Esp, Ebp, Esi, Edi };
 
-inline constexpr auto kPageSize4Kb = 4096;
+/**
+ * \brief Default page size.
+ */
+constexpr auto kPageSize4Kb = 4096u;
+
+/**
+ * \brief Allocator for more easier byte interaction.
+ */
 class basic_allocator {
   protected:
+    /**
+     * \brief Pointer to the start array of bytes.
+     */
     uint8_t* m_code;
+    /**
+     * \brief Size of array.
+     */
     uint32_t m_size;
+    /**
+     * \brief Offset for write.
+     */
     uint32_t m_offset;
 
   public:
-    basic_allocator(uint32_t size = kPageSize4Kb)
+    basic_allocator(const uint32_t size = kPageSize4Kb)
         : m_code(nullptr)
         , m_size(0)
         , m_offset(0) {
@@ -24,24 +40,41 @@ class basic_allocator {
             NULL, m_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     }
 
-    // writing manipulations
-    void db(uint8_t opcode) {
+    /**
+     * Writes new byte in the array and shifts offset.
+     *
+     * \param opcode New byte.
+     */
+    basic_allocator& db(const uint8_t opcode) {
         if ((m_offset + sizeof(uint8_t)) > m_size)
-            return;
+            return *this;
 
         m_code[m_offset++] = opcode;
+        return *this;
     }
 
+    /**
+     * Writes array of elements with specific size and shifts offset.
+     *
+     * \param object Array of elements.
+     * \param size Size of array.
+     */
     template<typename T>
-    void db(T* object, uint32_t size) {
+    basic_allocator& db(T* object, const uint32_t size) {
         uint8_t* oplist{ reinterpret_cast<uint8_t*>(object) };
-
         for (uint32_t i = 0; i < size; i++)
             db(oplist[i]);
+
+        return *this;
     }
 
+    /**
+     * Writes new value with size > 1 bytes and shifts offset.
+     *
+     * \param value New value.
+     */
     template<typename T>
-    void dbvalue(T value) {
+    basic_allocator& dbvalue(const T value) {
         if constexpr (sizeof(T) > 1) {
             detail::byteof<T> byteof{ value };
 
@@ -49,42 +82,78 @@ class basic_allocator {
                 db(byteof.bytes[i]);
         } else
             db(static_cast<uint8_t>(value));
+
+        return *this;
     }
 
-    template<typename T, typename... Args>
-    void dbvalues(T value, Args... args) {
+    /**
+     * Writes a sequence of any values in the array.
+     *
+     * \param value Head of sequence.
+     * \param ...args Tail of sequence.
+     */
+    template<typename Head, typename... Tail>
+    basic_allocator& dbvalues(const Head value, const Tail&&... args) {
         dbvalue(value);
 
-        if constexpr (sizeof...(Args) > 1)
-            dbvalues(args...);
+        if constexpr (sizeof...(Tail) > 1)
+            dbvalues(std::forward<Tail>(args)...);
         else
-            dbvalue(args...);
+            dbvalue(std::forward<Tail>(args)...);
+
+        return *this;
     }
 
-    // code pointer manipulations
-    uint8_t* begin() { return m_code; }
-    uint8_t* now() { return &m_code[m_offset]; }
-    uint8_t* end() { return &m_code[m_size - 1u]; }
+    /**
+     * \return Pointer to the start array of bytes.
+     */
+    memory_pointer begin() const { return { m_code }; }
+    /**
+     * \return Current position in the array.
+     */
+    memory_pointer now() const { return { &m_code[m_offset] }; }
+    /**
+     * \return Pointer to the end array of bytes.
+     */
+    memory_pointer end() const { return { &m_code[m_size - 1u] }; }
 
-    uint8_t* get(uint32_t offset = 0) { 
-        if (offset < m_size)
-            return &m_code[offset];
-        else
-            return end();
+    /**
+     * \param offset Offset from start of array.
+     * \return Pointer to the element of array.
+     */
+    memory_pointer get(const uint32_t offset = 0) const {
+        return (offset >= m_size) ? end() : memory_pointer(&m_code[offset]);
     }
 
-    template<typename T>
-    T get(uint32_t offset = 0) {
-        return reinterpret_cast<T>(get(offset));
+    /**
+     * \param offset Offset from start of array.
+     * \return Pointer to the element of array.
+     */
+    template<typename T = uint8_t*>
+    T get(const uint32_t offset = 0) const {
+        return get(offset).cast<T>();
     }
 
-    void free() { VirtualFree(m_code, NULL, MEM_RELEASE); }
-    void ready() { flush_memory(m_code, m_size); }
+    /**
+     * Releases the pointer to array.
+     */
+    void free() { VirtualFree(m_code, 0, MEM_RELEASE); }
 
-    // offset manipulations
-    uint32_t get_offset() { return m_offset; }
+    /**
+     * Marks that our code is ready to use.
+     */
+    void ready() const { flush_memory(m_code, m_size); }
 
-    void set_offset(uint32_t offset) {
+    /**
+     * \return Current position in the array.
+     */
+    uint32_t get_offset() const { return m_offset; }
+    /**
+     * Sets new position in the array.
+     *
+     * \param offset New position.
+     */
+    void set_offset(const uint32_t offset) {
         if ((offset < 0) || (offset >= m_size))
             return;
 
@@ -94,21 +163,28 @@ class basic_allocator {
 
 class asm_allocator : public basic_allocator {
   public:
-    asm_allocator(uint32_t size = kPageSize4Kb)
+    asm_allocator(const uint32_t size = kPageSize4Kb)
         : basic_allocator(size) {}
 
-    void jmp(const memory_pointer& to) {
+    asm_allocator& jmp(const memory_pointer& to) {
         auto rel32 = detail::get_relative_address(to, now());
 
         db(0xE9);
         dbvalue(rel32);
+        return *this;
     }
 
-    void push(Registers reg86) { db(0x50 + static_cast<uint8_t>(reg86)); }
+    asm_allocator& push(const Registers reg86) {
+        db(0x50 + static_cast<uint8_t>(reg86));
+        return *this;
+    }
 
-    void pop(Registers reg86) { db(0x58 + static_cast<uint8_t>(reg86)); }
+    asm_allocator& pop(const Registers reg86) {
+        db(0x58 + static_cast<uint8_t>(reg86));
+        return *this;
+    }
 
-    void mov(Registers in, Registers out, uint8_t offset) {
+    asm_allocator& mov(const Registers in, const Registers out, const uint8_t offset) {
         db(0x8B);
 
         if (!offset)
@@ -122,9 +198,11 @@ class asm_allocator : public basic_allocator {
 
         if (offset)
             db(offset);
+
+        return *this;
     }
 
-    void mov(uint32_t* in, Registers out) {
+    asm_allocator& mov(const uint32_t* in, const Registers out) {
         if (out == Registers::Eax)
             db(0xA3);
         else {
@@ -133,6 +211,7 @@ class asm_allocator : public basic_allocator {
         }
 
         dbvalue(in);
+        return *this;
     }
 };   // !class asm_allocator : public basic_allocator
 }   // namespace memwrapper
