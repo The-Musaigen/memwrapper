@@ -209,7 +209,7 @@ class memhook {
         };
 
         auto patch_hook = [this]() {
-            if (m_flags & memhook_flags_t::CallInstruction) {
+            if (m_flags & memhook_flags_t::kCallInstruction) {
                 // Redirecting jump to stored function absolute address;
                 m_trampoline_code->set_offset(0xBu);
                 m_trampoline_code->jmp(m_call_abs);
